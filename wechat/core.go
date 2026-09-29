@@ -243,8 +243,8 @@ func (u *Unpacker) analyze(data []byte, wxapkgFilePath string) ([]*WxapkgFileIte
 		if !strings.HasPrefix(item.savePath, u.item.UnpackSavePath) {
 			return nil, errors.Errorf("文件名 %s 会导致目录穿越", item.name)
 		}
-		if item.size > 10*1024*1024 {
-			return nil, errors.Errorf("文件名 %s 标记长度 %d 超出上限 10 MB", item.name, item.size)
+		if uint64(item.offset)+uint64(item.size) > uint64(len(data)) {
+			return nil, errors.Errorf("文件名 %s 偏移/长度越界 (offset=%d size=%d package=%d)", item.name, item.offset, item.size, len(data))
 		}
 
 		result[i] = item
@@ -314,10 +314,21 @@ func (u *Unpacker) unpack(thread int, callback func(item *WxapkgItem)) bool {
 				u.locker.Unlock()
 
 				dir := filepath.Dir(d.savePath)
-				err := os.MkdirAll(dir, os.ModePerm)
+				err := os.MkdirAll(dir, 0755)
 				if err != nil {
 					u.lock(func() {
 						u.item.SetErrorState(fmt.Sprintf("解包小程序文件 %s 时出错，创建目录 %s 失败，%v", *d.rawFilePath, dir, err))
+						if !hasError {
+							callback(u.item)
+						}
+						hasError = true
+					})
+					return
+				}
+
+				if uint64(d.offset)+uint64(d.size) > uint64(len(*d.rawFileData)) {
+					u.lock(func() {
+						u.item.SetErrorState(fmt.Sprintf("解包小程序文件 %s 时出错，文件偏移 %d + 长度 %d 超出数据范围 %d", *d.rawFilePath, d.offset, d.size, len(*d.rawFileData)))
 						if !hasError {
 							callback(u.item)
 						}
